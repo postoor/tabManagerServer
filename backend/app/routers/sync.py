@@ -45,11 +45,15 @@ async def sync_push(
 
     # Upsert collections and bookmarks
     for position, toby_list in enumerate(data.lists):
-        if toby_list.id in existing_collections:
+        is_new = toby_list.id not in existing_collections
+
+        if not is_new:
             collection = existing_collections[toby_list.id]
             collection.title = toby_list.title
             collection.labels = json.dumps(toby_list.labels)
             collection.position = position
+            # bookmarks already eagerly loaded via selectinload above
+            existing_bookmarks = {b.id: b for b in collection.bookmarks}
         else:
             collection = Collection(
                 id=toby_list.id,
@@ -60,13 +64,12 @@ async def sync_push(
             )
             db.add(collection)
             await db.flush()
-            # Reload to get bookmarks relationship
             existing_collections[toby_list.id] = collection
-            collection.bookmarks = []
+            # New collection — no bookmarks exist yet, skip relationship access
+            # to avoid triggering an async lazy load in a sync context.
+            existing_bookmarks = {}
 
-        # Handle bookmarks within this collection
         incoming_card_ids = {card.id for card in toby_list.cards}
-        existing_bookmarks = {b.id: b for b in (collection.bookmarks or [])}
 
         # Delete bookmarks not present
         for bk_id, bk in list(existing_bookmarks.items()):
