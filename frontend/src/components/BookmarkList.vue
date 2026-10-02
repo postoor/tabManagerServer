@@ -1,7 +1,29 @@
 <template>
-  <div class="collection-card">
+  <div
+    ref="rootRef"
+    class="collection-card"
+    :class="{
+      dragging: isDragging,
+      horizontal: dropHorizontal,
+      'drop-before': collectionDrop === 'before',
+      'drop-after': collectionDrop === 'after',
+      'drag-over-collection': bookmarkDrop !== null,
+    }"
+    :draggable="collectionDraggable"
+    @dragstart="onCollectionDragStart"
+    @dragend="onCollectionDragEnd"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
     <!-- Collection header -->
     <div class="collection-header">
+      <button class="drag-handle" title="Drag to reorder" @pointerdown="onHandlePointerDown">
+        <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+          <circle cx="3" cy="2" r="1.2"/><circle cx="7" cy="2" r="1.2"/><circle cx="3" cy="7" r="1.2"/>
+          <circle cx="7" cy="7" r="1.2"/><circle cx="3" cy="12" r="1.2"/><circle cx="7" cy="12" r="1.2"/>
+        </svg>
+      </button>
       <div class="collection-title-wrapper" @dblclick="startEditTitle">
         <input
           v-if="editingTitle"
@@ -30,17 +52,18 @@
     </div>
 
     <!-- Bookmarks list -->
-    <div
-      class="bookmarks-list"
-      @dragover.prevent
-      @drop="onDrop($event)"
-    >
+    <div class="bookmarks-list">
       <BookmarkCard
         v-for="bookmark in sortedBookmarks"
         :key="bookmark.id"
         :bookmark="bookmark"
+        :class="{
+          'drop-before': bookmarkDrop?.id === bookmark.id && !bookmarkDrop.after,
+          'drop-after': bookmarkDrop?.id === bookmark.id && bookmarkDrop.after,
+        }"
         draggable="true"
-        @dragstart="onDragStart($event, bookmark.id)"
+        @dragstart="onBookmarkDragStart($event, bookmark.id)"
+        @dragend="onBookmarkDragEnd"
         @delete="$emit('delete-bookmark', bookmark.id)"
         @update="(data) => $emit('update-bookmark', bookmark.id, data)"
       />
@@ -79,12 +102,19 @@ const emit = defineEmits([
   'update-title',
   'delete-bookmark',
   'update-bookmark',
+  'move-bookmark',
+  'move-collection',
 ])
 
 const editingTitle = ref(false)
 const editTitle = ref('')
 const titleInputRef = ref(null)
-const draggedId = ref(null)
+const rootRef = ref(null)
+const collectionDraggable = ref(false)
+const isDragging = ref(false)
+const collectionDrop = ref(null) // 'before' | 'after' | null
+const dropHorizontal = ref(false)
+const bookmarkDrop = ref(null) // { id, after } | { id: null } | null
 
 const sortedBookmarks = computed(() =>
   [...props.collection.bookmarks].sort((a, b) => a.position - b.position)
@@ -106,30 +136,103 @@ function saveTitle() {
   editingTitle.value = false
 }
 
-function onDragStart(event, bookmarkId) {
-  draggedId.value = bookmarkId
+const BOOKMARK_TYPE = 'text/x-bookmark'
+const COLLECTION_TYPE = 'text/x-collection'
+
+function onBookmarkDragStart(event, bookmarkId) {
+  event.stopPropagation()
   event.dataTransfer.effectAllowed = 'move'
-  event.dataTransfer.setData('text/plain', bookmarkId)
+  event.dataTransfer.setData(BOOKMARK_TYPE, bookmarkId)
+  const el = event.currentTarget
+  setTimeout(() => el.classList.add('bookmark-dragging'), 0)
+}
+
+function onBookmarkDragEnd(event) {
+  event.currentTarget.classList.remove('bookmark-dragging')
+}
+
+// Only the handle makes the whole card draggable, so text/inputs stay usable
+function onHandlePointerDown() {
+  collectionDraggable.value = true
+  document.addEventListener('pointerup', () => { collectionDraggable.value = false }, { once: true })
+}
+
+function onCollectionDragStart(event) {
+  if (event.target !== rootRef.value) return
+  if (!collectionDraggable.value) { event.preventDefault(); return }
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData(COLLECTION_TYPE, props.collection.id)
+  setTimeout(() => { isDragging.value = true }, 0)
+}
+
+function onCollectionDragEnd(event) {
+  if (event.target !== rootRef.value) return
+  collectionDraggable.value = false
+  isDragging.value = false
+  clearDropState()
+}
+
+function clearDropState() {
+  collectionDrop.value = null
+  bookmarkDrop.value = null
+}
+
+// Grid shows several columns side by side → split left/right, otherwise top/bottom
+function isGridHorizontal() {
+  const grid = rootRef.value?.parentElement
+  if (!grid) return false
+  return getComputedStyle(grid).gridTemplateColumns.split(' ').length > 1
+}
+
+function onDragOver(event) {
+  const types = event.dataTransfer.types
+  if (types.includes(COLLECTION_TYPE)) {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    const rect = rootRef.value.getBoundingClientRect()
+    dropHorizontal.value = isGridHorizontal()
+    const before = dropHorizontal.value
+      ? event.clientX < rect.left + rect.width / 2
+      : event.clientY < rect.top + rect.height / 2
+    collectionDrop.value = before ? 'before' : 'after'
+  } else if (types.includes(BOOKMARK_TYPE)) {
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    const card = event.target.closest('[data-bookmark-id]')
+    if (card && rootRef.value.contains(card)) {
+      const rect = card.getBoundingClientRect()
+      bookmarkDrop.value = {
+        id: card.dataset.bookmarkId,
+        after: event.clientY >= rect.top + rect.height / 2,
+      }
+    } else {
+      bookmarkDrop.value = { id: null }
+    }
+  }
+}
+
+function onDragLeave(event) {
+  if (!rootRef.value.contains(event.relatedTarget)) clearDropState()
 }
 
 function onDrop(event) {
-  const droppedId = event.dataTransfer.getData('text/plain')
-  if (!droppedId || droppedId === draggedId.value) return
-  // Reorder within collection — find drop target
-  const target = event.target.closest('[data-bookmark-id]')
-  if (target) {
-    const targetId = target.dataset.bookmarkId
-    const bookmarks = [...sortedBookmarks.value]
-    const fromIdx = bookmarks.findIndex((b) => b.id === droppedId)
-    const toIdx = bookmarks.findIndex((b) => b.id === targetId)
-    if (fromIdx !== -1 && toIdx !== -1) {
-      const [moved] = bookmarks.splice(fromIdx, 1)
-      bookmarks.splice(toIdx, 0, moved)
-      bookmarks.forEach((b, i) => {
-        emit('update-bookmark', b.id, { position: i })
-      })
+  const types = event.dataTransfer.types
+  if (types.includes(COLLECTION_TYPE)) {
+    event.preventDefault()
+    const draggedId = event.dataTransfer.getData(COLLECTION_TYPE)
+    const after = collectionDrop.value === 'after'
+    if (draggedId && draggedId !== props.collection.id) {
+      emit('move-collection', draggedId, props.collection.id, after)
+    }
+  } else if (types.includes(BOOKMARK_TYPE)) {
+    event.preventDefault()
+    const draggedId = event.dataTransfer.getData(BOOKMARK_TYPE)
+    const target = bookmarkDrop.value
+    if (draggedId && draggedId !== target?.id) {
+      emit('move-bookmark', draggedId, props.collection.id, target?.id || null, !!target?.after)
     }
   }
+  clearDropState()
 }
 </script>
 
@@ -148,6 +251,31 @@ function onDrop(event) {
 .collection-card:hover {
   box-shadow: var(--shadow-md);
 }
+
+.collection-card.dragging { opacity: 0.4; }
+.collection-card.drop-before { box-shadow: 0 -3px 0 var(--color-primary); }
+.collection-card.drop-after { box-shadow: 0 3px 0 var(--color-primary); }
+.collection-card.horizontal.drop-before { box-shadow: -3px 0 0 var(--color-primary); }
+.collection-card.horizontal.drop-after { box-shadow: 3px 0 0 var(--color-primary); }
+.collection-card.drag-over-collection {
+  outline: 2px dashed var(--color-primary);
+  outline-offset: 2px;
+}
+
+.drag-handle {
+  display: flex;
+  align-items: center;
+  padding: 4px 2px;
+  color: var(--color-text-3);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.drag-handle:hover { color: var(--color-text); }
+.drag-handle:active { cursor: grabbing; }
+
+.bookmark-card.bookmark-dragging { opacity: 0.35; }
+.bookmark-card.drop-before { box-shadow: 0 -2px 0 var(--color-primary); }
+.bookmark-card.drop-after { box-shadow: 0 2px 0 var(--color-primary); }
 
 .collection-header {
   display: flex;

@@ -226,8 +226,19 @@ async def reorder(
                 .where(Bookmark.id == item.id, Collection.user_id == current_user.id)
             )
             bookmark = result.scalar_one_or_none()
-            if bookmark:
-                bookmark.position = item.position
+            if not bookmark:
+                continue
+            if item.collection_id and item.collection_id != bookmark.collection_id:
+                target = await db.execute(
+                    select(Collection).where(
+                        Collection.id == item.collection_id,
+                        Collection.user_id == current_user.id,
+                    )
+                )
+                if target.scalar_one_or_none() is None:
+                    raise HTTPException(status_code=404, detail="Collection not found")
+                bookmark.collection_id = item.collection_id
+            bookmark.position = item.position
     else:
         raise HTTPException(status_code=400, detail="Invalid reorder type")
 

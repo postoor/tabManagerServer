@@ -117,6 +117,61 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     }
   }
 
+  // Move a bookmark before/after targetBookmarkId in targetCollectionId
+  // (or append when targetBookmarkId is null). Optimistic; refetches on failure.
+  async function moveBookmark(bookmarkId, targetCollectionId, targetBookmarkId = null, after = false) {
+    const source = collections.value.find((c) => c.bookmarks.some((b) => b.id === bookmarkId))
+    const target = collections.value.find((c) => c.id === targetCollectionId)
+    if (!source || !target || bookmarkId === targetBookmarkId) return
+
+    const sortByPos = (col) => [...col.bookmarks].sort((a, b) => a.position - b.position)
+    const sourceList = sortByPos(source).filter((b) => b.id !== bookmarkId)
+    const moved = source.bookmarks.find((b) => b.id === bookmarkId)
+    const targetList = source === target ? sourceList : sortByPos(target)
+
+    let idx = targetBookmarkId ? targetList.findIndex((b) => b.id === targetBookmarkId) : -1
+    idx = idx === -1 ? targetList.length : idx + (after ? 1 : 0)
+    targetList.splice(idx, 0, { ...moved, collection_id: target.id })
+
+    const reindex = (list) => list.map((b, i) => ({ ...b, position: i }))
+    target.bookmarks = reindex(targetList)
+    if (source !== target) source.bookmarks = reindex(sourceList)
+
+    const items = target.bookmarks.map((b) => ({ id: b.id, position: b.position, collection_id: target.id }))
+    if (source !== target) {
+      items.push(...source.bookmarks.map((b) => ({ id: b.id, position: b.position })))
+    }
+    try {
+      await bookmarksApi.reorder('bookmark', items)
+    } catch (err) {
+      error.value = err.response?.data?.detail || 'Failed to move bookmark'
+      await fetchCollections()
+      throw err
+    }
+  }
+
+  // Move a collection before/after targetCollectionId. Optimistic; refetches on failure.
+  async function moveCollection(collectionId, targetCollectionId, after = false) {
+    if (collectionId === targetCollectionId) return
+    const list = [...collections.value]
+    const fromIdx = list.findIndex((c) => c.id === collectionId)
+    if (fromIdx === -1) return
+    const [moved] = list.splice(fromIdx, 1)
+    let idx = list.findIndex((c) => c.id === targetCollectionId)
+    idx = idx === -1 ? list.length : idx + (after ? 1 : 0)
+    list.splice(idx, 0, moved)
+    list.forEach((c, i) => { c.position = i })
+    collections.value = list
+
+    try {
+      await bookmarksApi.reorder('collection', list.map((c) => ({ id: c.id, position: c.position })))
+    } catch (err) {
+      error.value = err.response?.data?.detail || 'Failed to move collection'
+      await fetchCollections()
+      throw err
+    }
+  }
+
   async function syncPush() {
     try {
       const payload = {
@@ -196,6 +251,8 @@ export const useBookmarksStore = defineStore('bookmarks', () => {
     updateBookmark,
     deleteBookmark,
     reorder,
+    moveBookmark,
+    moveCollection,
     syncPush,
     syncPull,
     fetchSyncStatus,

@@ -108,6 +108,7 @@ class CollectionResponse(BaseModel):
 class ReorderItem(BaseModel):
     id: str
     position: int
+    collection_id: Optional[str] = None  # bookmark only: move to this collection
 
 
 class ReorderRequest(BaseModel):

@@ -22,8 +22,19 @@
           v-for="col in bookmarksStore.collections"
           :key="col.id"
           class="nav-item"
-          :class="{ active: activeCollectionId === col.id }"
+          :class="{
+            active: activeCollectionId === col.id,
+            'drop-before': navDrop?.id === col.id && navDrop.mode === 'before',
+            'drop-after': navDrop?.id === col.id && navDrop.mode === 'after',
+            'drop-into': navDrop?.id === col.id && navDrop.mode === 'into',
+          }"
+          draggable="true"
           @click="activeCollectionId = col.id; sidebarOpen = false"
+          @dragstart="onNavDragStart($event, col.id)"
+          @dragover="onNavDragOver($event, col.id)"
+          @dragleave="onNavDragLeave($event)"
+          @drop="onNavDrop($event, col.id)"
+          @dragend="navDrop = null"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M3 7h18M3 12h18M3 17h18"/>
@@ -115,6 +126,8 @@
             @update-title="(title) => updateCollectionTitle(col.id, title)"
             @delete-bookmark="deleteBookmark"
             @update-bookmark="updateBookmark"
+            @move-bookmark="moveBookmark"
+            @move-collection="moveCollection"
           />
         </div>
       </main>
@@ -249,6 +262,62 @@ async function updateBookmark(id, data) {
   await bookmarksStore.updateBookmark(id, data)
 }
 
+async function moveBookmark(bookmarkId, collectionId, targetBookmarkId, after) {
+  try {
+    await bookmarksStore.moveBookmark(bookmarkId, collectionId, targetBookmarkId, after)
+  } catch {
+    showToast('Move failed', 'error')
+  }
+}
+
+async function moveCollection(collectionId, targetCollectionId, after) {
+  try {
+    await bookmarksStore.moveCollection(collectionId, targetCollectionId, after)
+  } catch {
+    showToast('Move failed', 'error')
+  }
+}
+
+// Sidebar: reorder collections, or drop a bookmark into a collection
+const navDrop = ref(null) // { id, mode: 'before' | 'after' | 'into' }
+
+function onNavDragStart(event, collectionId) {
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/x-collection', collectionId)
+}
+
+function onNavDragOver(event, collectionId) {
+  const types = event.dataTransfer.types
+  if (types.includes('text/x-collection')) {
+    event.preventDefault()
+    const rect = event.currentTarget.getBoundingClientRect()
+    const mode = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    navDrop.value = { id: collectionId, mode }
+  } else if (types.includes('text/x-bookmark')) {
+    event.preventDefault()
+    navDrop.value = { id: collectionId, mode: 'into' }
+  }
+}
+
+function onNavDragLeave(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) navDrop.value = null
+}
+
+function onNavDrop(event, collectionId) {
+  const drop = navDrop.value
+  navDrop.value = null
+  const types = event.dataTransfer.types
+  if (types.includes('text/x-collection')) {
+    event.preventDefault()
+    const draggedId = event.dataTransfer.getData('text/x-collection')
+    if (draggedId) moveCollection(draggedId, collectionId, drop?.mode === 'after')
+  } else if (types.includes('text/x-bookmark')) {
+    event.preventDefault()
+    const bookmarkId = event.dataTransfer.getData('text/x-bookmark')
+    if (bookmarkId) moveBookmark(bookmarkId, collectionId, null, false)
+  }
+}
+
 function handleLogout() {
   authStore.logout()
   router.push('/login')
@@ -345,6 +414,14 @@ onUnmounted(() => {
   background: var(--color-primary-50);
   color: var(--color-primary);
   font-weight: 500;
+}
+
+.nav-item.drop-before { box-shadow: 0 -2px 0 var(--color-primary); }
+.nav-item.drop-after { box-shadow: 0 2px 0 var(--color-primary); }
+.nav-item.drop-into {
+  background: var(--color-primary-50);
+  outline: 2px dashed var(--color-primary);
+  outline-offset: -2px;
 }
 
 .nav-item-title {
