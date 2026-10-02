@@ -68,6 +68,20 @@
         </div>
 
         <div class="header-right">
+          <button
+            v-if="displayedCollections.length > 0"
+            class="btn btn-secondary btn-sm"
+            @click="toggleCollapseAll"
+            :title="allCollapsed ? 'Expand all collections' : 'Collapse all collections'"
+          >
+            <svg v-if="allCollapsed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/>
+            </svg>
+            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/>
+            </svg>
+            {{ allCollapsed ? 'Expand all' : 'Collapse all' }}
+          </button>
           <div class="sync-info" v-if="syncStatus">
             <span class="sync-label">{{ bookmarksStore.collections.length }} lists &middot; {{ totalBookmarks }} bookmarks</span>
           </div>
@@ -121,6 +135,8 @@
             v-for="col in displayedCollections"
             :key="col.id"
             :collection="col"
+            :collapsed="collapsedIds.has(col.id)"
+            @toggle-collapse="toggleCollapse(col.id)"
             @add-bookmark="openAddModal(col.id)"
             @delete-collection="deleteCollection(col.id)"
             @update-title="(title) => updateCollectionTitle(col.id, title)"
@@ -275,6 +291,45 @@ async function moveCollection(collectionId, targetCollectionId, after) {
     await bookmarksStore.moveCollection(collectionId, targetCollectionId, after)
   } catch {
     showToast('Move failed', 'error')
+  }
+}
+
+// Collapsed state is a per-browser view preference, kept in localStorage
+const COLLAPSED_KEY = 'collapsedCollections'
+
+function loadCollapsed() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY)) || [])
+  } catch {
+    return new Set()
+  }
+}
+
+const collapsedIds = ref(loadCollapsed())
+
+watch(collapsedIds, (ids) => {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...ids]))
+  } catch {
+    // storage unavailable (private mode / quota) → state just won't persist
+  }
+}, { deep: true })
+
+const allCollapsed = computed(() =>
+  displayedCollections.value.length > 0 &&
+  displayedCollections.value.every((c) => collapsedIds.value.has(c.id))
+)
+
+function toggleCollapse(id) {
+  if (collapsedIds.value.has(id)) collapsedIds.value.delete(id)
+  else collapsedIds.value.add(id)
+}
+
+function toggleCollapseAll() {
+  const collapse = !allCollapsed.value
+  for (const c of displayedCollections.value) {
+    if (collapse) collapsedIds.value.add(c.id)
+    else collapsedIds.value.delete(c.id)
   }
 }
 

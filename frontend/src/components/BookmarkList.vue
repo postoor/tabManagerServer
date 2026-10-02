@@ -8,6 +8,7 @@
       'drop-before': collectionDrop === 'before',
       'drop-after': collectionDrop === 'after',
       'drag-over-collection': bookmarkDrop !== null,
+      collapsed,
     }"
     :draggable="collectionDraggable"
     @dragstart="onCollectionDragStart"
@@ -22,6 +23,16 @@
         <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
           <circle cx="3" cy="2" r="1.2"/><circle cx="7" cy="2" r="1.2"/><circle cx="3" cy="7" r="1.2"/>
           <circle cx="7" cy="7" r="1.2"/><circle cx="3" cy="12" r="1.2"/><circle cx="7" cy="12" r="1.2"/>
+        </svg>
+      </button>
+      <button
+        class="collapse-btn"
+        :title="collapsed ? 'Expand' : 'Collapse'"
+        :aria-expanded="!collapsed"
+        @click="$emit('toggle-collapse')"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="6 9 12 15 18 9"/>
         </svg>
       </button>
       <div class="collection-title-wrapper" @dblclick="startEditTitle">
@@ -52,7 +63,7 @@
     </div>
 
     <!-- Bookmarks list -->
-    <div class="bookmarks-list">
+    <div v-show="!collapsed" class="bookmarks-list">
       <BookmarkCard
         v-for="bookmark in sortedBookmarks"
         :key="bookmark.id"
@@ -76,7 +87,7 @@
     </div>
 
     <!-- Add bookmark button -->
-    <button class="add-bookmark-btn" @click="$emit('add-bookmark')">
+    <button v-show="!collapsed" class="add-bookmark-btn" @click="$emit('add-bookmark')">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
       </svg>
@@ -94,6 +105,10 @@ const props = defineProps({
     type: Object,
     required: true,
   },
+  collapsed: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits([
@@ -104,6 +119,7 @@ const emit = defineEmits([
   'update-bookmark',
   'move-bookmark',
   'move-collection',
+  'toggle-collapse',
 ])
 
 const editingTitle = ref(false)
@@ -285,6 +301,19 @@ function onDrop(event) {
   border-bottom: 1px solid var(--color-border);
   gap: 8px;
 }
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-3);
+  flex-shrink: 0;
+  transition: transform var(--transition);
+}
+.collapse-btn:hover { color: var(--color-text); background: var(--color-surface-3); }
+.collection-card.collapsed .collapse-btn { transform: rotate(-90deg); }
+.collection-card.collapsed .collection-header { border-bottom: none; }
 
 .collection-title-wrapper {
   flex: 1;
