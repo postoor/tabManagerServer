@@ -14,3 +14,4 @@
 - 2026-10-02: routes live at `/bookmarks/...` → all routers are mounted under `/api` prefix (`app/main.py`).
 - 2026-10-02: moving a bookmark across collections → `POST /api/bookmarks/reorder` with `type: "bookmark"` and per-item `collection_id`.
 - 2026-10-02: assumed localhost:8000 is this backend → another service owns :8000 on this machine; for tests run backend in a venv on another port with `DATABASE_URL=sqlite+aiosqlite:///<tmp>/test.db`.
+- 2026-10-02: HTML5 drag-and-drop covers mobile → touch never starts native drags; touch path lives in `frontend/src/composables/touchDrag.js`. Test it in Playwright with `hasTouch` + CDP `Input.dispatchTouchEvent` (long-press ≥350ms for bookmarks).
