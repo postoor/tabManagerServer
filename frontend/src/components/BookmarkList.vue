@@ -19,7 +19,7 @@
   >
     <!-- Collection header -->
     <div class="collection-header">
-      <button class="drag-handle" title="Drag to reorder" @pointerdown="onHandlePointerDown">
+      <button class="drag-handle" title="Drag to reorder" @pointerdown="onHandlePointerDown" @touchstart="onHandleTouchStart">
         <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
           <circle cx="3" cy="2" r="1.2"/><circle cx="7" cy="2" r="1.2"/><circle cx="3" cy="7" r="1.2"/>
           <circle cx="7" cy="7" r="1.2"/><circle cx="3" cy="12" r="1.2"/><circle cx="7" cy="12" r="1.2"/>
@@ -74,6 +74,7 @@
         }"
         draggable="true"
         @dragstart="onBookmarkDragStart($event, bookmark.id)"
+        @touchstart="onBookmarkTouchStart($event, bookmark.id)"
         @dragend="onBookmarkDragEnd"
         @delete="$emit('delete-bookmark', bookmark.id)"
         @update="(data) => $emit('update-bookmark', bookmark.id, data)"
@@ -97,8 +98,9 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import BookmarkCard from './BookmarkCard.vue'
+import { isTouchPointer, registerDropZone, startTouchDrag } from '../composables/touchDrag.js'
 
 const props = defineProps({
   collection: {
@@ -157,6 +159,7 @@ const COLLECTION_TYPE = 'text/x-collection'
 
 function onBookmarkDragStart(event, bookmarkId) {
   event.stopPropagation()
+  if (isTouchPointer()) { event.preventDefault(); return }
   event.dataTransfer.effectAllowed = 'move'
   event.dataTransfer.setData(BOOKMARK_TYPE, bookmarkId)
   const el = event.currentTarget
@@ -175,10 +178,33 @@ function onHandlePointerDown() {
 
 function onCollectionDragStart(event) {
   if (event.target !== rootRef.value) return
-  if (!collectionDraggable.value) { event.preventDefault(); return }
+  if (!collectionDraggable.value || isTouchPointer()) { event.preventDefault(); return }
   event.dataTransfer.effectAllowed = 'move'
   event.dataTransfer.setData(COLLECTION_TYPE, props.collection.id)
   setTimeout(() => { isDragging.value = true }, 0)
+}
+
+function onBookmarkTouchStart(event, bookmarkId) {
+  const el = event.currentTarget
+  if (el.classList.contains('editing') || event.target.closest('button, input, textarea')) return
+  startTouchDrag(event, {
+    type: BOOKMARK_TYPE,
+    id: bookmarkId,
+    el,
+    longPress: true,
+    onStart: () => el.classList.add('bookmark-dragging'),
+    onEnd: () => el.classList.remove('bookmark-dragging'),
+  })
+}
+
+function onHandleTouchStart(event) {
+  startTouchDrag(event, {
+    type: COLLECTION_TYPE,
+    id: props.collection.id,
+    el: rootRef.value,
+    onStart: () => { isDragging.value = true },
+    onEnd: () => { isDragging.value = false },
+  })
 }
 
 function onCollectionDragEnd(event) {
@@ -200,26 +226,26 @@ function isGridHorizontal() {
   return getComputedStyle(grid).gridTemplateColumns.split(' ').length > 1
 }
 
-function onDragOver(event) {
-  const types = event.dataTransfer.types
-  if (types.includes(COLLECTION_TYPE)) {
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
+function dragType(event) {
+  return [COLLECTION_TYPE, BOOKMARK_TYPE].find((t) => event.dataTransfer.types.includes(t))
+}
+
+// Shared by native drag events and touch drags
+function updateDropTarget(type, x, y, target) {
+  if (type === COLLECTION_TYPE) {
     const rect = rootRef.value.getBoundingClientRect()
     dropHorizontal.value = isGridHorizontal()
     const before = dropHorizontal.value
-      ? event.clientX < rect.left + rect.width / 2
-      : event.clientY < rect.top + rect.height / 2
+      ? x < rect.left + rect.width / 2
+      : y < rect.top + rect.height / 2
     collectionDrop.value = before ? 'before' : 'after'
-  } else if (types.includes(BOOKMARK_TYPE)) {
-    event.preventDefault()
-    event.dataTransfer.dropEffect = 'move'
-    const card = event.target.closest('[data-bookmark-id]')
+  } else if (type === BOOKMARK_TYPE) {
+    const card = target.closest('[data-bookmark-id]')
     if (card && rootRef.value.contains(card)) {
       const rect = card.getBoundingClientRect()
       bookmarkDrop.value = {
         id: card.dataset.bookmarkId,
-        after: event.clientY >= rect.top + rect.height / 2,
+        after: y >= rect.top + rect.height / 2,
       }
     } else {
       bookmarkDrop.value = { id: null }
@@ -227,22 +253,13 @@ function onDragOver(event) {
   }
 }
 
-function onDragLeave(event) {
-  if (!rootRef.value.contains(event.relatedTarget)) clearDropState()
-}
-
-function onDrop(event) {
-  const types = event.dataTransfer.types
-  if (types.includes(COLLECTION_TYPE)) {
-    event.preventDefault()
-    const draggedId = event.dataTransfer.getData(COLLECTION_TYPE)
+function applyDrop(type, draggedId) {
+  if (type === COLLECTION_TYPE) {
     const after = collectionDrop.value === 'after'
     if (draggedId && draggedId !== props.collection.id) {
       emit('move-collection', draggedId, props.collection.id, after)
     }
-  } else if (types.includes(BOOKMARK_TYPE)) {
-    event.preventDefault()
-    const draggedId = event.dataTransfer.getData(BOOKMARK_TYPE)
+  } else if (type === BOOKMARK_TYPE) {
     const target = bookmarkDrop.value
     if (draggedId && draggedId !== target?.id) {
       emit('move-bookmark', draggedId, props.collection.id, target?.id || null, !!target?.after)
@@ -250,6 +267,35 @@ function onDrop(event) {
   }
   clearDropState()
 }
+
+function onDragOver(event) {
+  const type = dragType(event)
+  if (!type) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+  updateDropTarget(type, event.clientX, event.clientY, event.target)
+}
+
+function onDragLeave(event) {
+  if (!rootRef.value.contains(event.relatedTarget)) clearDropState()
+}
+
+function onDrop(event) {
+  const type = dragType(event)
+  if (!type) { clearDropState(); return }
+  event.preventDefault()
+  applyDrop(type, event.dataTransfer.getData(type))
+}
+
+let unregisterDropZone = null
+onMounted(() => {
+  unregisterDropZone = registerDropZone(rootRef.value, {
+    over: updateDropTarget,
+    leave: clearDropState,
+    drop: applyDrop,
+  })
+})
+onUnmounted(() => unregisterDropZone?.())
 </script>
 
 <style scoped>
@@ -288,8 +334,18 @@ function onDrop(event) {
 }
 .drag-handle:hover { color: var(--color-text); }
 .drag-handle:active { cursor: grabbing; }
+.drag-handle { touch-action: none; }
 
 .bookmark-card.bookmark-dragging { opacity: 0.35; }
+
+/* Long-press starts a touch drag, so keep it from selecting text or opening the callout */
+@media (pointer: coarse) {
+  .bookmark-card {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+}
 .bookmark-card.drop-before { box-shadow: 0 -2px 0 var(--color-primary); }
 .bookmark-card.drop-after { box-shadow: 0 2px 0 var(--color-primary); }
 
